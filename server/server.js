@@ -7,6 +7,10 @@ const app = express();
 const port = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY || 'your-secret-api-key';
 
+// Simple in-memory store for download status
+// In a production app, you might use a database instead
+const downloads = {};
+
 // Middleware
 app.use(express.json());
 app.use(cors());
@@ -41,27 +45,60 @@ app.post('/download', authenticate, (req, res) => {
     return res.status(400).json({ error: 'Invalid URL format' });
   }
   
+  // Generate a unique ID for this download
+  const downloadId = Date.now().toString();
+  
+  // Store download in our tracking system
+  downloads[downloadId] = {
+    url,
+    status: 'downloading',
+    startTime: new Date(),
+    endTime: null,
+    error: null
+  };
+  
   console.log(`Received download request for: ${url}`);
   
-  // Execute streamrip command
+  // Respond immediately with the download ID
+  res.json({ 
+    success: true, 
+    message: 'Download initiated',
+    downloadId: downloadId
+  });
+  
+  // Execute streamrip command in the background
   exec(`rip url "${url}"`, (error, stdout, stderr) => {
     if (error) {
       console.error(`Error: ${error.message}`);
-      return res.status(500).json({ error: error.message });
-    }
-    
-    if (stderr) {
+      downloads[downloadId].status = 'failed';
+      downloads[downloadId].error = error.message;
+    } else if (stderr) {
       console.error(`stderr: ${stderr}`);
-      return res.status(500).json({ error: stderr });
+      downloads[downloadId].status = 'failed';
+      downloads[downloadId].error = stderr;
+    } else {
+      console.log(`stdout: ${stdout}`);
+      downloads[downloadId].status = 'completed';
     }
     
-    console.log(`stdout: ${stdout}`);
-    res.json({ 
-      success: true, 
-      message: 'Download initiated',
-      output: stdout 
-    });
+    downloads[downloadId].endTime = new Date();
   });
+});
+
+// Check download status
+app.get('/download/:id', authenticate, (req, res) => {
+  const downloadId = req.params.id;
+  
+  if (!downloads[downloadId]) {
+    return res.status(404).json({ error: 'Download not found' });
+  }
+  
+  res.json(downloads[downloadId]);
+});
+
+// Get all downloads (could be restricted or paginated in production)
+app.get('/downloads', authenticate, (req, res) => {
+  res.json(downloads);
 });
 
 // Health check endpoint
